@@ -1,0 +1,17 @@
+{
+  "name": "practus-persona-agent",
+  "version": "1.0.0",
+  "description": "Practus executive persona research agent - generates structured, brand-formatted 1-pager persona profiles for outreach from user-supplied source material.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

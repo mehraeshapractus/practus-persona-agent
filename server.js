@@ -45,12 +45,13 @@ app.post("/generate", async (req, res) => {
   try {
     const client = getClient();
     const apifyToken = process.env.APIFY_API_TOKEN;
+    const linkedinCookie = process.env.LINKEDIN_COOKIE;
 
     // 1. Scrape LinkedIn if URL provided
     let linkedinData = null;
     if (linkedinUrl && linkedinUrl.trim() && apifyToken) {
       try {
-        linkedinData = await scrapeLinkedIn(linkedinUrl.trim(), apifyToken);
+        linkedinData = await scrapeLinkedIn(linkedinUrl.trim(), apifyToken, linkedinCookie);
       } catch (e) {
         console.warn("LinkedIn scrape failed:", e.message);
       }
@@ -83,7 +84,7 @@ Current Organization: ${organization}
 LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None provided"}
 
-No source material available. Search the web for this person — LinkedIn profile, press mentions, interviews, company bio, any public content. Then call the emit_persona_report tool with the complete 8-section structure based on what you found.`;
+No source material was pasted and the LinkedIn scrape returned no data (profile may be private). Search the web for this person by name and company — look for their LinkedIn profile text, company bio, press mentions, interviews, news articles. Then call the emit_persona_report tool with the complete 8-section structure.`;
 
     const tools = autoSearch
       ? [{ type: "web_search_20250305", name: "web_search" }, personaReportSchema]

@@ -1,5 +1,7 @@
 require("dotenv").config();
 const express = require("express");
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
 const Anthropic = require("@anthropic-ai/sdk");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
@@ -8,6 +10,7 @@ const { renderReport } = require("./lib/renderReport");
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
@@ -21,7 +24,7 @@ function getClient() {
 app.get("/", (req, res) => res.send(renderForm()));
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
-app.post("/generate", async (req, res) => {
+app.post("/generate", upload.single("linkedinPdf"), async (req, res) => {
   const { fullName, organization, linkedinUrl, additionalLinks, pastedMaterial } = req.body;
 
   if (!fullName || !organization) {
@@ -30,7 +33,21 @@ app.post("/generate", async (req, res) => {
 
   try {
     const client = getClient();
-    const hasMaterial = pastedMaterial && pastedMaterial.trim();
+
+    // Extract text from uploaded PDF if present
+    let pdfText = "";
+    if (req.file && req.file.buffer) {
+      try {
+        const parsed = await pdfParse(req.file.buffer);
+        pdfText = parsed.text.trim();
+        console.log("[PDF] Extracted", pdfText.length, "chars");
+      } catch (e) {
+        console.warn("[PDF] Parse failed:", e.message);
+      }
+    }
+
+    const sourceMaterial = pdfText || (pastedMaterial && pastedMaterial.trim()) || "";
+    const hasMaterial = sourceMaterial.length > 0;
 
     const userMessage = hasMaterial
       ? `TARGET INDIVIDUAL
@@ -39,9 +56,9 @@ Current Organization: ${organization}
 LinkedIn URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None"}
 
-SOURCE MATERIAL (pasted by user — use only this, do not invent anything beyond it):
+SOURCE MATERIAL (use only this, do not invent anything beyond it):
 """
-${pastedMaterial.trim()}
+${sourceMaterial}
 """
 
 Call the emit_persona_report tool with the complete 8-section structure.`

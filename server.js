@@ -1,7 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const multer = require("multer");
-const pdfParse = require("pdf-parse");
 const Anthropic = require("@anthropic-ai/sdk");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
@@ -11,7 +9,6 @@ const { getProfile } = require("./lib/profiles");
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
@@ -25,7 +22,7 @@ function getClient() {
 app.get("/", (req, res) => res.send(renderForm()));
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
-app.post("/generate", upload.single("linkedinPdf"), async (req, res) => {
+app.post("/generate", async (req, res) => {
   const { fullName, organization, linkedinUrl, additionalLinks, pastedMaterial } = req.body;
 
   if (!fullName || !organization) {
@@ -39,18 +36,7 @@ app.post("/generate", upload.single("linkedinPdf"), async (req, res) => {
     let sourceMaterial = getProfile(fullName);
     if (sourceMaterial) console.log("[Profile] Found stored profile for:", fullName);
 
-    // 2. Extract text from uploaded PDF if present
-    if (!sourceMaterial && req.file && req.file.buffer) {
-      try {
-        const parsed = await pdfParse(req.file.buffer);
-        sourceMaterial = parsed.text.trim();
-        console.log("[PDF] Extracted", sourceMaterial.length, "chars");
-      } catch (e) {
-        console.warn("[PDF] Parse failed:", e.message);
-      }
-    }
-
-    // 3. Fall back to pasted text
+    // 2. Fall back to pasted text
     if (!sourceMaterial) sourceMaterial = (pastedMaterial && pastedMaterial.trim()) || "";
 
     const hasMaterial = sourceMaterial.length > 0;

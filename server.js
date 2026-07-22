@@ -5,6 +5,7 @@ const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
 const { renderReport } = require("./lib/renderReport");
+const { scrapeLinkedIn } = require("./lib/scrapeLinkedIn");
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
@@ -41,31 +42,44 @@ app.post("/generate", async (req, res) => {
       .send(renderForm({ error: "Full name and organization are required." }));
   }
 
-  const autoSearch = !pastedMaterial || !pastedMaterial.trim();
-
-  const userMessage = autoSearch
-    ? `TARGET INDIVIDUAL
-Full Name: ${fullName}
-Current Organization: ${organization}
-LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
-Additional Links: ${additionalLinks || "None provided"}
-
-No source material was pasted. Search the web for this person — look for their LinkedIn profile, press mentions, interviews, company bio, and any public content. Then call the emit_persona_report tool with the complete 8-section structure based on what you found.`
-    : `TARGET INDIVIDUAL
-Full Name: ${fullName}
-Current Organization: ${organization}
-LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
-Additional Links: ${additionalLinks || "None provided"}
-
-SOURCE MATERIAL (this is the ONLY information you may use — do not invent anything beyond it):
-"""
-${pastedMaterial}
-"""
-
-Call the emit_persona_report tool with the complete 8-section structure.`;
-
   try {
     const client = getClient();
+    const apifyToken = process.env.APIFY_API_TOKEN;
+
+    // 1. Scrape LinkedIn if URL provided
+    let linkedinData = null;
+    if (linkedinUrl && linkedinUrl.trim() && apifyToken) {
+      try {
+        linkedinData = await scrapeLinkedIn(linkedinUrl.trim(), apifyToken);
+      } catch (e) {
+        console.warn("LinkedIn scrape failed:", e.message);
+      }
+    }
+
+    // 2. Build source material: scraped data > pasted text > nothing (auto web search)
+    const sourceMaterial = linkedinData || (pastedMaterial && pastedMaterial.trim()) || null;
+    const autoSearch = !sourceMaterial;
+
+    const userMessage = sourceMaterial
+      ? `TARGET INDIVIDUAL
+Full Name: ${fullName}
+Current Organization: ${organization}
+LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
+Additional Links: ${additionalLinks || "None provided"}
+
+SOURCE MATERIAL:
+"""
+${sourceMaterial}
+"""
+
+Call the emit_persona_report tool with the complete 8-section structure.`
+      : `TARGET INDIVIDUAL
+Full Name: ${fullName}
+Current Organization: ${organization}
+LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
+Additional Links: ${additionalLinks || "None provided"}
+
+No source material available. Search the web for this person — LinkedIn profile, press mentions, interviews, company bio, any public content. Then call the emit_persona_report tool with the complete 8-section structure based on what you found.`;
 
     const tools = autoSearch
       ? [{ type: "web_search_20250305", name: "web_search" }, personaReportSchema]

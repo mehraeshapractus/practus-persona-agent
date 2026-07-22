@@ -1,8 +1,41 @@
 require("dotenv").config();
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
+const { tavily } = require("@tavily/core");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
+
+async function searchPerson(fullName, organization, linkedinUrl) {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) throw new Error("TAVILY_API_KEY is not set.");
+  const client = tavily({ apiKey });
+
+  const queries = [
+    `${fullName} ${organization}`,
+    `${fullName} ${organization} LinkedIn background career`,
+    `"${fullName}" ${organization} interview OR article OR profile`,
+  ];
+  if (linkedinUrl) queries.push(`site:linkedin.com "${fullName}"`);
+
+  const results = await Promise.all(
+    queries.map((q) =>
+      client.search(q, { maxResults: 5, includeAnswer: false })
+        .catch(() => ({ results: [] }))
+    )
+  );
+
+  const seen = new Set();
+  const chunks = [];
+  for (const r of results) {
+    for (const item of r.results || []) {
+      if (!seen.has(item.url)) {
+        seen.add(item.url);
+        chunks.push(`SOURCE: ${item.url}\nTITLE: ${item.title}\n${item.content}`);
+      }
+    }
+  }
+  return chunks.join("\n\n---\n\n");
+}
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
@@ -33,10 +66,31 @@ app.get("/sample", (req, res) => {
 app.post("/generate", async (req, res) => {
   const { fullName, organization, linkedinUrl, additionalLinks, pastedMaterial } = req.body;
 
-  if (!fullName || !organization || !pastedMaterial) {
+  if (!fullName || !organization) {
     return res
       .status(400)
-      .send(renderForm({ error: "Full name, organization, and pasted research material are required." }));
+      .send(renderForm({ error: "Full name and organization are required." }));
+  }
+
+  let sourceMaterial = pastedMaterial || "";
+  let sourceNote = "manually pasted material";
+
+  if (!sourceMaterial.trim() && process.env.TAVILY_API_KEY) {
+    try {
+      sourceMaterial = await searchPerson(fullName, organization, linkedinUrl);
+      sourceNote = "auto-searched from the web";
+    } catch (err) {
+      console.error("Search failed:", err.message);
+      return res.status(400).send(renderForm({
+        error: "Auto-search failed. Please paste research material manually."
+      }));
+    }
+  }
+
+  if (!sourceMaterial.trim()) {
+    return res.status(400).send(renderForm({
+      error: "Please paste some research material, or add a TAVILY_API_KEY to enable auto-search."
+    }));
   }
 
   const userMessage = `TARGET INDIVIDUAL
@@ -44,10 +98,11 @@ Full Name: ${fullName}
 Current Organization: ${organization}
 LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None provided"}
+Source: ${sourceNote}
 
-SOURCE MATERIAL SUPPLIED (this is the ONLY information you may use — do not invent anything beyond it):
+SOURCE MATERIAL (this is the ONLY information you may use — do not invent anything beyond it):
 """
-${pastedMaterial}
+${sourceMaterial}
 """
 
 Now produce the complete persona 1-pager following the 8-section structure in your instructions.`;

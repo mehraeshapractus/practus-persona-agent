@@ -110,7 +110,7 @@ No source material available. Search the web for this person — LinkedIn profil
       throw new Error("Model did not return a structured report. Try again.");
     }
 
-    res.send(renderReport(fullName, organization, toolUse.input));
+    res.send(renderReport(toolUse.input));
   } catch (err) {
     console.error(err);
     res.status(500).send(renderForm({

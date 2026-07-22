@@ -45,13 +45,12 @@ app.post("/generate", async (req, res) => {
   try {
     const client = getClient();
     const apifyToken = process.env.APIFY_API_TOKEN;
-    const linkedinCookie = process.env.LINKEDIN_COOKIE;
 
     // 1. Scrape LinkedIn if URL provided
     let linkedinData = null;
     if (linkedinUrl && linkedinUrl.trim() && apifyToken) {
       try {
-        linkedinData = await scrapeLinkedIn(linkedinUrl.trim(), apifyToken, linkedinCookie);
+        linkedinData = await scrapeLinkedIn(linkedinUrl.trim(), apifyToken);
       } catch (e) {
         console.warn("LinkedIn scrape failed:", e.message);
       }

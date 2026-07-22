@@ -60,6 +60,10 @@ app.post("/generate", async (req, res) => {
     const sourceMaterial = linkedinData || (pastedMaterial && pastedMaterial.trim()) || null;
     const autoSearch = !sourceMaterial;
 
+    const sourceLabel = linkedinData
+      ? "SOURCE MATERIAL (scraped from LinkedIn via Apify — treat all fields as Observed):"
+      : "SOURCE MATERIAL (pasted by user):";
+
     const userMessage = sourceMaterial
       ? `TARGET INDIVIDUAL
 Full Name: ${fullName}
@@ -67,7 +71,7 @@ Current Organization: ${organization}
 LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None provided"}
 
-SOURCE MATERIAL:
+${sourceLabel}
 """
 ${sourceMaterial}
 """

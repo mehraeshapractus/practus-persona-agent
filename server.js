@@ -3,6 +3,8 @@ const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
+const { personaReportSchema } = require("./lib/schema");
+const { renderReport } = require("./lib/renderReport");
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
@@ -48,7 +50,7 @@ Current Organization: ${organization}
 LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None provided"}
 
-No source material was pasted. Search the web for this person — look for their LinkedIn profile, press mentions, interviews, company bio, and any public content. Use what you find as the source material, then produce the complete persona 1-pager following the 8-section structure in your instructions. Label everything you find as Observed, and flag anything you cannot find as Gap.`
+No source material was pasted. Search the web for this person — look for their LinkedIn profile, press mentions, interviews, company bio, and any public content. Then call the emit_persona_report tool with the complete 8-section structure based on what you found.`
     : `TARGET INDIVIDUAL
 Full Name: ${fullName}
 Current Organization: ${organization}
@@ -60,39 +62,42 @@ SOURCE MATERIAL (this is the ONLY information you may use — do not invent anyt
 ${pastedMaterial}
 """
 
-Now produce the complete persona 1-pager following the 8-section structure in your instructions.`;
+Call the emit_persona_report tool with the complete 8-section structure.`;
 
   try {
     const client = getClient();
+
+    const tools = autoSearch
+      ? [{ type: "web_search_20250305", name: "web_search" }, personaReportSchema]
+      : [personaReportSchema];
 
     const requestParams = {
       model: MODEL,
       max_tokens: 8000,
       system: SYSTEM_PROMPT,
+      tools,
       messages: [{ role: "user", content: userMessage }],
     };
 
-    if (autoSearch) {
-      requestParams.tools = [{ type: "web_search_20250305", name: "web_search" }];
+    if (!autoSearch) {
+      requestParams.tool_choice = { type: "tool", name: "emit_persona_report" };
     }
 
     const response = await client.messages.create(requestParams);
 
-    const textBlock = response.content.find((c) => c.type === "text");
-    if (!textBlock) {
-      throw new Error("Model did not return a report. Try again.");
+    const toolUse = response.content.find(
+      (c) => c.type === "tool_use" && c.name === "emit_persona_report"
+    );
+    if (!toolUse) {
+      throw new Error("Model did not return a structured report. Try again.");
     }
 
-    res.send(renderTextReport(fullName, organization, textBlock.text));
+    res.send(renderReport(fullName, organization, toolUse.input));
   } catch (err) {
     console.error(err);
-    res
-      .status(500)
-      .send(
-        renderForm({
-          error: `Something went wrong generating the report: ${err.message}`
-        })
-      );
+    res.status(500).send(renderForm({
+      error: `Something went wrong generating the report: ${err.message}`
+    }));
   }
 });
 
@@ -398,285 +403,6 @@ ul.b li strong{color:var(--navy);}
 
 <p class="page-footer">Practus Research Intelligence &nbsp;&middot;&nbsp; Sample output &mdash; fictional individual &nbsp;&middot;&nbsp; All inferences explicitly labelled &nbsp;&middot;&nbsp; Sourced only from material supplied for analysis</p>
 </div></body></html>`;
-}
-
-function fmt(s) {
-  return s
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/\bObserved:/g, '<span class="lbl lbl-o">Observed</span>')
-    .replace(/\bInferred:/g, '<span class="lbl lbl-i">Inferred</span>')
-    .replace(/\bGap:/g, '<span class="lbl lbl-g">Gap</span>');
-}
-
-function mdToHtml(text) {
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  const lines = escaped.split("\n");
-  const parts = [];
-  let inList = false;
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-
-    const secMatch = line.match(/^SECTION (\d+):\s*(.+)$/);
-    if (secMatch) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      const n = String(secMatch[1]).padStart(2, "0");
-      parts.push(`<h2 class="sec-hdr"><span class="sec-n">${n}</span>${secMatch[2]}</h2>`);
-      continue;
-    }
-
-    if (/^## /.test(line)) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      parts.push(`<h2 class="sec-hdr">${fmt(line.slice(3))}</h2>`);
-      continue;
-    }
-    if (/^### /.test(line)) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      parts.push(`<h3>${fmt(line.slice(4))}</h3>`);
-      continue;
-    }
-    if (/^#### /.test(line)) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      parts.push(`<h4>${fmt(line.slice(5))}</h4>`);
-      continue;
-    }
-
-    if (/^---+$/.test(line)) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      parts.push("<hr>");
-      continue;
-    }
-
-    const liMatch = line.match(/^[-*•] (.+)$/) || line.match(/^\d+\. (.+)$/);
-    if (liMatch) {
-      if (!inList) { parts.push("<ul>"); inList = true; }
-      parts.push(`<li>${fmt(liMatch[1])}</li>`);
-      continue;
-    }
-
-    if (!line.trim()) {
-      if (inList) { parts.push("</ul>"); inList = false; }
-      continue;
-    }
-
-    if (inList) { parts.push("</ul>"); inList = false; }
-    parts.push(`<p>${fmt(line)}</p>`);
-  }
-
-  if (inList) parts.push("</ul>");
-  return parts.join("\n");
-}
-
-function renderTextReport(name, org, text) {
-  const body = mdToHtml(text);
-  const initials = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${name} — Practus</title>
-<style>
-*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  background: #F4F4F5;
-  color: #18181B;
-  font-size: 14px;
-  line-height: 1.7;
-  -webkit-font-smoothing: antialiased;
-}
-.site-header {
-  background: #fff;
-  border-bottom: 1px solid #E4E4E7;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 2rem;
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-.header-left { display: flex; align-items: center; gap: 0; }
-.logo-sep { width: 1px; height: 16px; background: #D4D4D8; margin: 0 14px; }
-.back-link { font-size: 12.5px; color: #71717A; text-decoration: none; }
-.back-link:hover { color: #18181B; }
-.btn-print {
-  height: 32px;
-  padding: 0 14px;
-  background: #fff;
-  border: 1px solid #E4E4E7;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  font-family: inherit;
-  color: #3F3F46;
-  cursor: pointer;
-  transition: border-color 0.1s;
-}
-.btn-print:hover { border-color: #A1A1AA; }
-.page { max-width: 680px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
-.subject-card {
-  background: #fff;
-  border: 1px solid #E4E4E7;
-  border-radius: 8px;
-  padding: 1.5rem 1.75rem;
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-.initials {
-  width: 44px; height: 44px;
-  background: #18181B;
-  border-radius: 6px;
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  flex-shrink: 0;
-}
-.subject-meta h1 {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  color: #18181B;
-  margin-bottom: 2px;
-}
-.org-line { font-size: 13px; color: #71717A; }
-.report-card {
-  background: #fff;
-  border: 1px solid #E4E4E7;
-  border-radius: 8px;
-  padding: 1.75rem 2rem;
-}
-.report .sec-hdr {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #A1A1AA;
-  margin: 2.25rem 0 0.9rem;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #F4F4F5;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.report .sec-hdr:first-child { margin-top: 0; }
-.sec-n {
-  font-size: 9.5px;
-  font-weight: 700;
-  color: #18181B;
-  font-variant-numeric: tabular-nums;
-  background: #F4F4F5;
-  padding: 1px 6px;
-  border-radius: 3px;
-}
-.report h3 {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #52525B;
-  margin: 1.5rem 0 0.5rem;
-}
-.report h4 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #18181B;
-  margin: 1rem 0 0.3rem;
-}
-.report p { margin-bottom: 0.6rem; color: #27272A; }
-.report ul { list-style: none; margin: 0.4rem 0 0.9rem; padding: 0; }
-.report li {
-  position: relative;
-  padding-left: 16px;
-  margin-bottom: 6px;
-  color: #27272A;
-}
-.report li::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 9px;
-  width: 5px; height: 1.5px;
-  background: #D4D4D8;
-}
-.report hr { border: none; border-top: 1px solid #F4F4F5; margin: 1.5rem 0; }
-.report strong { font-weight: 600; color: #18181B; }
-.report em { font-style: italic; color: #52525B; }
-.lbl {
-  display: inline-block;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 3px;
-  margin-right: 4px;
-  vertical-align: middle;
-  position: relative;
-  top: -1px;
-}
-.lbl-o { background: #F0FDF4; color: #166534; }
-.lbl-i { background: #EFF6FF; color: #1D4ED8; }
-.lbl-g { background: #FFFBEB; color: #92400E; }
-.page-foot {
-  margin-top: 1.25rem;
-  font-size: 11px;
-  color: #A1A1AA;
-  text-align: center;
-}
-@media print {
-  body { background: #fff; }
-  .site-header { display: none; }
-  .subject-card, .report-card { border: none; box-shadow: none; }
-  .page { padding-top: 1rem; }
-}
-</style>
-</head>
-<body>
-<header class="site-header">
-  <div class="header-left">
-    <svg width="110" height="28" viewBox="0 0 110 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <text x="0" y="21" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="22" font-weight="600" fill="#2394A4" letter-spacing="-0.5">practus</text>
-      <rect x="88" y="1" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <rect x="96" y="1" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <rect x="88" y="9" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <rect x="96" y="9" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <rect x="88" y="17" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <rect x="96" y="17" width="6" height="6" rx="1.5" fill="#2394A4"/>
-      <circle cx="107" cy="4" r="3" fill="#F5A823"/>
-      <circle cx="99" cy="12" r="3" fill="#F5A823"/>
-      <circle cx="91" cy="20" r="3" fill="#F5A823"/>
-    </svg>
-    <span class="logo-sep"></span>
-    <a class="back-link" href="/">&larr; New persona</a>
-  </div>
-  <button class="btn-print" onclick="window.print()">Print / PDF</button>
-</header>
-<div class="page">
-  <div class="subject-card">
-    <div class="initials">${initials}</div>
-    <div class="subject-meta">
-      <h1>${name}</h1>
-      <div class="org-line">${org}</div>
-    </div>
-  </div>
-  <div class="report-card">
-    <div class="report">${body}</div>
-  </div>
-  <p class="page-foot">Practus Research Intelligence &middot; Sourced only from material supplied for this analysis</p>
-</div>
-</body>
-</html>`;
 }
 
 app.listen(PORT, () => {

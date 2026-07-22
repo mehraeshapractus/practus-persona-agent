@@ -84,7 +84,12 @@ Current Organization: ${organization}
 LinkedIn Profile URL: ${linkedinUrl || "Not provided"}
 Additional Links: ${additionalLinks || "None provided"}
 
-No source material was pasted and the LinkedIn scrape returned no data (profile may be private). Search the web for this person by name and company — look for their LinkedIn profile text, company bio, press mentions, interviews, news articles. Then call the emit_persona_report tool with the complete 8-section structure.`;
+No source material available. Search the web aggressively — run multiple searches:
+1. "${fullName} ${organization}"
+2. "${fullName} LinkedIn"
+3. "${fullName} ${organization} bio OR profile OR interview"
+
+Use everything you find: LinkedIn about section, company page bio, press mentions, interviews, articles, conference appearances. Then call the emit_persona_report tool with the complete 8-section structure.`;
 
     const tools = autoSearch
       ? [{ type: "web_search_20250305", name: "web_search" }, personaReportSchema]

@@ -23,7 +23,7 @@ app.get("/", (req, res) => res.send(renderForm()));
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
 app.post("/generate", async (req, res) => {
-  const { fullName, organization, linkedinUrl, additionalLinks, pastedMaterial } = req.body;
+  const { fullName, organization } = req.body;
 
   if (!fullName || !organization) {
     return res.status(400).send(renderForm({ error: "Full name and organization are required." }));
@@ -36,55 +36,56 @@ app.post("/generate", async (req, res) => {
     let sourceMaterial = getProfile(fullName);
     if (sourceMaterial) console.log("[Profile] Found stored profile for:", fullName);
 
-    // 2. Fall back to pasted text
-    if (!sourceMaterial) sourceMaterial = (pastedMaterial && pastedMaterial.trim()) || "";
+    // 2. If no stored profile — search the web first, then force the report
+    if (!sourceMaterial) {
+      console.log("[Search] No stored profile, running web search for:", fullName);
 
-    const hasMaterial = sourceMaterial.length > 0;
-
-    const userMessage = hasMaterial
-      ? `TARGET INDIVIDUAL
-Full Name: ${fullName}
-Current Organization: ${organization}
-LinkedIn URL: ${linkedinUrl || "Not provided"}
-Additional Links: ${additionalLinks || "None"}
-
-SOURCE MATERIAL (use only this, do not invent anything beyond it):
-"""
-${sourceMaterial}
-"""
-
-Call the emit_persona_report tool with the complete 8-section structure.`
-      : `TARGET INDIVIDUAL
-Full Name: ${fullName}
-Current Organization: ${organization}
-LinkedIn URL: ${linkedinUrl || "Not provided"}
-Additional Links: ${additionalLinks || "None"}
-
-Search the web now to gather everything publicly available about this person. Run multiple searches:
+      const searchResponse = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{
+          role: "user",
+          content: `Find everything publicly available about ${fullName} who works at ${organization}. Search for:
 - "${fullName} ${organization}"
-- "${fullName} LinkedIn"
 - "${fullName} site:linkedin.com"
-- "${fullName} interview OR profile OR bio"
+- "${fullName} ${organization} LinkedIn"
+- "${fullName} profile OR bio OR career"
 
-Gather all you can find — LinkedIn bio, experience, company page, press, interviews — then call the emit_persona_report tool with the complete 8-section structure.`;
+Return a detailed summary of their career history, current role, education, skills, and any notable achievements or quotes you find.`,
+        }],
+      });
 
-    const tools = hasMaterial
-      ? [personaReportSchema]
-      : [{ type: "web_search_20250305", name: "web_search" }, personaReportSchema];
+      sourceMaterial = searchResponse.content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text)
+        .join("\n")
+        .trim();
 
-    const requestParams = {
+      console.log("[Search] Gathered", sourceMaterial.length, "chars");
+    }
+
+    // 3. Force emit_persona_report with whatever source we have
+    const response = await client.messages.create({
       model: MODEL,
       max_tokens: 8000,
       system: SYSTEM_PROMPT,
-      tools,
-      messages: [{ role: "user", content: userMessage }],
-    };
+      tools: [personaReportSchema],
+      tool_choice: { type: "tool", name: "emit_persona_report" },
+      messages: [{
+        role: "user",
+        content: `TARGET INDIVIDUAL
+Full Name: ${fullName}
+Current Organization: ${organization}
 
-    if (hasMaterial) {
-      requestParams.tool_choice = { type: "tool", name: "emit_persona_report" };
-    }
+SOURCE MATERIAL:
+"""
+${sourceMaterial || "No specific data found — use your general knowledge about this person and their organization."}
+"""
 
-    const response = await client.messages.create(requestParams);
+Call the emit_persona_report tool with the complete 8-section structure.`,
+      }],
+    });
 
     const toolUse = response.content.find(
       (c) => c.type === "tool_use" && c.name === "emit_persona_report"

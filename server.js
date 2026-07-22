@@ -7,6 +7,7 @@ const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
 const { renderReport } = require("./lib/renderReport");
+const { getProfile } = require("./lib/profiles");
 
 const app = express();
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
@@ -34,19 +35,24 @@ app.post("/generate", upload.single("linkedinPdf"), async (req, res) => {
   try {
     const client = getClient();
 
-    // Extract text from uploaded PDF if present
-    let pdfText = "";
-    if (req.file && req.file.buffer) {
+    // 1. Check pre-loaded profile store
+    let sourceMaterial = getProfile(fullName);
+    if (sourceMaterial) console.log("[Profile] Found stored profile for:", fullName);
+
+    // 2. Extract text from uploaded PDF if present
+    if (!sourceMaterial && req.file && req.file.buffer) {
       try {
         const parsed = await pdfParse(req.file.buffer);
-        pdfText = parsed.text.trim();
-        console.log("[PDF] Extracted", pdfText.length, "chars");
+        sourceMaterial = parsed.text.trim();
+        console.log("[PDF] Extracted", sourceMaterial.length, "chars");
       } catch (e) {
         console.warn("[PDF] Parse failed:", e.message);
       }
     }
 
-    const sourceMaterial = pdfText || (pastedMaterial && pastedMaterial.trim()) || "";
+    // 3. Fall back to pasted text
+    if (!sourceMaterial) sourceMaterial = (pastedMaterial && pastedMaterial.trim()) || "";
+
     const hasMaterial = sourceMaterial.length > 0;
 
     const userMessage = hasMaterial

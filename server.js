@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
@@ -106,23 +106,18 @@ app.post("/send-email", async (req, res) => {
     const { reportDataJson, personName } = req.body;
     if (!reportDataJson) return res.json({ ok: false, error: "No report data" });
 
-    const emailUser = process.env.EMAIL_USER;
-    const emailPass = process.env.EMAIL_PASS;
-    if (!emailUser || !emailPass) {
-      console.warn("[Email] EMAIL_USER / EMAIL_PASS not configured");
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      console.warn("[Email] RESEND_API_KEY not configured");
       return res.json({ ok: false, error: "Email not configured" });
     }
 
     const data = JSON.parse(reportDataJson);
     const reportHtml = renderReport(data);
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: emailUser, pass: emailPass },
-    });
-
-    await transporter.sendMail({
-      from: emailUser,
+    const resend = new Resend(apiKey);
+    await resend.emails.send({
+      from: process.env.EMAIL_FROM || "Practus <noreply@roibypractus.com>",
       to: "yashwin.pamecha@roibypractus.com",
       subject: `Persona Brief: ${personName || "Unknown"}`,
       html: reportHtml,

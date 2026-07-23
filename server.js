@@ -108,7 +108,7 @@ Call the emit_persona_report tool with the complete 8-section structure.`,
           },
         });
         await transporter.sendMail({
-          from: process.env.EMAIL_USER,
+          from: `"Myrah" <${process.env.EMAIL_USER}>`,
           to: recipientEmail,
           subject: `Persona Brief: ${fullName}`,
           html: reportHtml,

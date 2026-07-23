@@ -25,7 +25,7 @@ app.get("/", (req, res) => res.send(renderForm()));
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
 app.post("/generate", async (req, res) => {
-  const { fullName, organization } = req.body;
+  const { fullName, organization, recipientEmail } = req.body;
 
   if (!fullName || !organization) {
     return res.status(400).send(renderForm({ error: "Full name and organization are required." }));
@@ -94,41 +94,29 @@ Call the emit_persona_report tool with the complete 8-section structure.`,
     );
     if (!toolUse) throw new Error("Model did not return a structured report. Try again.");
 
-    res.send(renderReport(toolUse.input));
+    const reportHtml = renderReport(toolUse.input);
+
+    if (recipientEmail && process.env.RESEND_API_KEY) {
+      try {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        await resend.emails.send({
+          from: process.env.EMAIL_FROM || "Practus <onboarding@resend.dev>",
+          to: recipientEmail,
+          subject: `Persona Brief: ${fullName}`,
+          html: reportHtml,
+        });
+        console.log("[Email] Sent to", recipientEmail);
+      } catch (e) {
+        console.warn("[Email] Failed:", e.message);
+      }
+    }
+
+    res.send(reportHtml);
   } catch (err) {
     console.error(err);
     res.status(500).send(renderForm({ error: `Error generating report: ${err.message}` }));
   }
 });
 
-app.post("/send-email", async (req, res) => {
-  try {
-    const { reportDataJson, personName } = req.body;
-    if (!reportDataJson) return res.json({ ok: false, error: "No report data" });
-
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) {
-      console.warn("[Email] RESEND_API_KEY not configured");
-      return res.json({ ok: false, error: "Email not configured" });
-    }
-
-    const data = JSON.parse(reportDataJson);
-    const reportHtml = renderReport(data);
-
-    const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from: process.env.EMAIL_FROM || "Practus <noreply@roibypractus.com>",
-      to: "yashwin.pamecha@roibypractus.com",
-      subject: `Persona Brief: ${personName || "Unknown"}`,
-      html: reportHtml,
-    });
-
-    console.log("[Email] Sent persona brief for", personName);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("[Email] Error:", err.message);
-    res.json({ ok: false, error: err.message });
-  }
-});
 
 app.listen(PORT, () => console.log(`Practus Persona Agent listening on port ${PORT}`));

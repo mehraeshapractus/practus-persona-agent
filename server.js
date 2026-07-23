@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
+const nodemailer = require("nodemailer");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
@@ -12,6 +13,7 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+const SEARCH_MODEL = "claude-haiku-4-5-20251001";
 
 function getClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -41,8 +43,8 @@ app.post("/generate", async (req, res) => {
       console.log("[Search] No stored profile, running web search for:", fullName);
 
       const searchResponse = await client.messages.create({
-        model: MODEL,
-        max_tokens: 4000,
+        model: SEARCH_MODEL,
+        max_tokens: 2000,
         tools: [{ type: "web_search_20250305", name: "web_search" }],
         messages: [{
           role: "user",
@@ -68,7 +70,7 @@ Return a detailed summary of their career history, current role, education, skil
     // 3. Force emit_persona_report with whatever source we have
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 8000,
+      max_tokens: 5000,
       system: SYSTEM_PROMPT,
       tools: [personaReportSchema],
       tool_choice: { type: "tool", name: "emit_persona_report" },
@@ -96,6 +98,41 @@ Call the emit_persona_report tool with the complete 8-section structure.`,
   } catch (err) {
     console.error(err);
     res.status(500).send(renderForm({ error: `Error generating report: ${err.message}` }));
+  }
+});
+
+app.post("/send-email", async (req, res) => {
+  try {
+    const { reportDataJson, personName } = req.body;
+    if (!reportDataJson) return res.json({ ok: false, error: "No report data" });
+
+    const emailUser = process.env.EMAIL_USER;
+    const emailPass = process.env.EMAIL_PASS;
+    if (!emailUser || !emailPass) {
+      console.warn("[Email] EMAIL_USER / EMAIL_PASS not configured");
+      return res.json({ ok: false, error: "Email not configured" });
+    }
+
+    const data = JSON.parse(reportDataJson);
+    const reportHtml = renderReport(data);
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: emailUser, pass: emailPass },
+    });
+
+    await transporter.sendMail({
+      from: emailUser,
+      to: "yashwin.pamecha@roibypractus.com",
+      subject: `Persona Brief: ${personName || "Unknown"}`,
+      html: reportHtml,
+    });
+
+    console.log("[Email] Sent persona brief for", personName);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Email] Error:", err.message);
+    res.json({ ok: false, error: err.message });
   }
 });
 

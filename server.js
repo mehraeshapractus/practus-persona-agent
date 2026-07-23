@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
-const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
@@ -96,11 +96,19 @@ Call the emit_persona_report tool with the complete 8-section structure.`,
 
     const reportHtml = renderReport(toolUse.input);
 
-    if (recipientEmail && process.env.RESEND_API_KEY) {
+    if (recipientEmail && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       try {
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        await resend.emails.send({
-          from: process.env.EMAIL_FROM || "Practus <onboarding@resend.dev>",
+        const transporter = nodemailer.createTransport({
+          host: "smtp.office365.com",
+          port: 587,
+          secure: false,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+        });
+        await transporter.sendMail({
+          from: process.env.EMAIL_USER,
           to: recipientEmail,
           subject: `Persona Brief: ${fullName}`,
           html: reportHtml,

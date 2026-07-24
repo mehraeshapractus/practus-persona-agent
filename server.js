@@ -1,7 +1,60 @@
 require("dotenv").config();
 const express = require("express");
 const Anthropic = require("@anthropic-ai/sdk");
-const nodemailer = require("nodemailer");
+async function sendViaGraph(recipientEmail, subject, htmlBody) {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+  const senderEmail = process.env.EMAIL_USER;
+
+  if (!tenantId || !clientId || !clientSecret || !senderEmail) {
+    throw new Error("Missing Azure/email env vars");
+  }
+
+  // Get access token
+  const tokenRes = await fetch(
+    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://graph.microsoft.com/.default",
+        grant_type: "client_credentials",
+      }),
+    }
+  );
+  const tokenData = await tokenRes.json();
+  if (!tokenData.access_token) {
+    throw new Error("Failed to get access token: " + JSON.stringify(tokenData));
+  }
+
+  // Send email via Graph API
+  const sendRes = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${senderEmail}/sendMail`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: "HTML", content: htmlBody },
+          toRecipients: [{ emailAddress: { address: recipientEmail } }],
+          from: { emailAddress: { name: "Myrah", address: senderEmail } },
+        },
+      }),
+    }
+  );
+
+  if (!sendRes.ok) {
+    const err = await sendRes.text();
+    throw new Error("Graph API error: " + err);
+  }
+}
 const { SYSTEM_PROMPT } = require("./lib/systemPrompt");
 const { renderForm } = require("./lib/renderForm");
 const { personaReportSchema } = require("./lib/schema");
@@ -96,23 +149,9 @@ Call the emit_persona_report tool with the complete 8-section structure.`,
 
     const reportHtml = renderReport(toolUse.input);
 
-    if (recipientEmail && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    if (recipientEmail && process.env.AZURE_CLIENT_SECRET) {
       try {
-        const transporter = nodemailer.createTransport({
-          host: "smtp.office365.com",
-          port: 587,
-          secure: false,
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-        });
-        await transporter.sendMail({
-          from: `"Myrah" <${process.env.EMAIL_USER}>`,
-          to: recipientEmail,
-          subject: `Persona Brief: ${fullName}`,
-          html: reportHtml,
-        });
+        await sendViaGraph(recipientEmail, `Persona Brief: ${fullName}`, reportHtml);
         console.log("[Email] Sent to", recipientEmail);
       } catch (e) {
         console.warn("[Email] Failed:", e.message);
